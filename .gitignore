@@ -1,5 +1,5 @@
 # Binaries
-ts-discord-status
+/ts-discord-status
 *.exe
 
 # Test config with credentials
