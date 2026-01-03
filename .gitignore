@@ -1,0 +1,15 @@
+# Binaries
+ts-discord-status
+*.exe
+
+# Test config with credentials
+config.test.yaml
+config.local.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

@@ -1,0 +1,42 @@
+teamspeak:
+  # TeamSpeak server hostname or IP
+  host: "ts.example.com"
+  # ServerQuery port (default: 10011)
+  query_port: 10011
+  # ServerQuery username (default: serveradmin)
+  username: "serveradmin"
+  # ServerQuery password (find in TS3 server logs or use 'serveradmin' command)
+  password: "your-serverquery-password"
+  # Virtual server ID (default: 1)
+  server_id: 1
+
+discord:
+  # Discord bot token (from Discord Developer Portal)
+  token: "your-discord-bot-token"
+  # Channel ID where status message will be posted
+  # Enable Developer Mode in Discord settings, then right-click channel → Copy ID
+  channel_id: "123456789012345678"
+
+display:
+  # Show channels even if they have no users (default: false)
+  show_empty_channels: false
+  # How often to update the Discord message (default: 30s)
+  update_interval: 30s
+
+  # Optional: Server connection info to display in embed
+  server_info:
+    address: "ts.example.com"
+    password: "server-password"
+
+  # Optional: Custom footer text
+  custom_footer: ""
+
+  # Optional: Update channel name with user count
+  # Placeholders: {online}, {max}, {server}
+  # Example: "TS: {online}/{max}" -> "TS: 2/32"
+  # Note: Rate limited to once per 5 minutes (Discord limit)
+  # channel_name_format: "TS: {online} online"
+
+logging:
+  # Log level: debug, info, warn, error (default: info)
+  level: "info"
