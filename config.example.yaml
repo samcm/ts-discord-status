@@ -37,6 +37,9 @@ display:
   # Note: Rate limited to once per 5 minutes (Discord limit)
   # channel_name_format: "TS: {online} online"
 
+  # Optional: Thumbnail image URL for the embed
+  # thumbnail_url: "https://example.com/server-logo.png"
+
 logging:
   # Log level: debug, info, warn, error (default: info)
   level: "info"

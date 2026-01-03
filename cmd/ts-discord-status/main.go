@@ -87,6 +87,7 @@ func run(cmd *cobra.Command, args []string) error {
 		ServerPassword:    cfg.Display.ServerInfo.Password,
 		CustomFooter:      cfg.Display.CustomFooter,
 		ChannelNameFormat: cfg.Display.ChannelNameFormat,
+		ThumbnailURL:      cfg.Display.ThumbnailURL,
 	})
 
 	// Create bridge service

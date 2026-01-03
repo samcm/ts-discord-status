@@ -39,6 +39,7 @@ type DisplayConfig struct {
 	ServerInfo        ServerInfo    `yaml:"server_info"`
 	CustomFooter      string        `yaml:"custom_footer"`
 	ChannelNameFormat string        `yaml:"channel_name_format"` // e.g., "TS: {online}/{max}" - updates channel name
+	ThumbnailURL      string        `yaml:"thumbnail_url"`       // Optional image URL for embed thumbnail
 }
 
 // ServerInfo holds optional server connection info to display.

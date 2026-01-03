@@ -27,6 +27,7 @@ type DisplayConfig struct {
 	ServerPassword    string
 	CustomFooter      string
 	ChannelNameFormat string // e.g., "TS: {online}/{max}"
+	ThumbnailURL      string // Optional thumbnail image URL
 }
 
 // Service defines the Discord service interface.
@@ -191,98 +192,88 @@ func (s *service) maybeUpdateChannelName(state *teamspeak.State) {
 // buildEmbed creates a Discord embed from the TeamSpeak state.
 func (s *service) buildEmbed(state *teamspeak.State) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{
-		Title:     "TeamSpeak Status",
 		Color:     0x2B5B84, // TeamSpeak blue
 		Timestamp: time.Now().Format(time.RFC3339),
+		Author: &discordgo.MessageEmbedAuthor{
+			Name:    "TeamSpeak Server",
+			IconURL: "https://i.imgur.com/pK2qRkC.png", // TS3 icon
+		},
 	}
 
 	if state == nil {
-		embed.Description = "Connecting to TeamSpeak server..."
+		embed.Description = "```\n⏳ Connecting to server...\n```"
+		embed.Color = 0xFAA61A // Orange - connecting
 		return embed
 	}
 
-	// Update title with server name
-	embed.Title = fmt.Sprintf("TeamSpeak Status (%s)", state.ServerName)
+	// Server name as title
+	embed.Title = state.ServerName
 
-	// Dynamic color based on activity
-	if state.TotalUsers > 0 {
-		embed.Color = 0x43B581 // Discord green - users online
-	} else {
-		embed.Color = 0x747F8D // Discord gray - empty
+	// Optional thumbnail
+	if s.display.ThumbnailURL != "" {
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{
+			URL: s.display.ThumbnailURL,
+		}
+	}
+
+	// Dynamic color based on capacity
+	capacityPercent := float64(state.TotalUsers) / float64(state.MaxClients)
+	switch {
+	case state.TotalUsers == 0:
+		embed.Color = 0x95A5A6 // Gray - empty
+	case capacityPercent >= 0.8:
+		embed.Color = 0xE74C3C // Red - almost full
+	case capacityPercent >= 0.5:
+		embed.Color = 0xF39C12 // Orange - busy
+	default:
+		embed.Color = 0x2ECC71 // Green - available
 	}
 
 	var fields []*discordgo.MessageEmbedField
 
-	// Server info field (if configured)
-	if s.display.ServerAddress != "" || s.display.ServerPassword != "" {
-		var serverInfo strings.Builder
+	// Stats row (inline fields)
+	fields = append(fields, &discordgo.MessageEmbedField{
+		Name:   "👥 Online",
+		Value:  fmt.Sprintf("**%d** / %d", state.TotalUsers, state.MaxClients),
+		Inline: true,
+	})
 
-		if s.display.ServerAddress != "" {
-			serverInfo.WriteString(fmt.Sprintf("**Address:** `%s`\n", s.display.ServerAddress))
-		}
+	fields = append(fields, &discordgo.MessageEmbedField{
+		Name:   "⏱️ Uptime",
+		Value:  formatDuration(state.Uptime),
+		Inline: true,
+	})
 
+	// Connection info (if configured)
+	if s.display.ServerAddress != "" {
+		connectValue := fmt.Sprintf("`%s`", s.display.ServerAddress)
 		if s.display.ServerPassword != "" {
-			serverInfo.WriteString(fmt.Sprintf("**Password:** `%s`", s.display.ServerPassword))
+			connectValue += fmt.Sprintf("\nPass: `%s`", s.display.ServerPassword)
 		}
 
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:   "Server Info",
-			Value:  serverInfo.String(),
-			Inline: false,
+			Name:   "🔗 Connect",
+			Value:  connectValue,
+			Inline: true,
 		})
 	}
 
-	// Build channel list
-	var channelContent strings.Builder
-
-	for _, ch := range state.Channels {
-		// Skip channels with no users if configured
-		if !s.display.ShowEmptyChannels && len(ch.Users) == 0 {
-			continue
-		}
-
-		// Skip spacer channels (usually named with [*spacer*] or similar)
-		if strings.Contains(strings.ToLower(ch.Name), "spacer") {
-			continue
-		}
-
-		channelContent.WriteString(fmt.Sprintf("**%s** (%d)\n", ch.Name, len(ch.Users)))
-
-		for _, user := range ch.Users {
-			status := buildUserStatus(user)
-			if status != "" {
-				channelContent.WriteString(fmt.Sprintf("  • %s %s\n", user.Nickname, status))
-			} else {
-				channelContent.WriteString(fmt.Sprintf("  • %s\n", user.Nickname))
-			}
-		}
-
-		if len(ch.Users) > 0 {
-			channelContent.WriteString("\n")
-		}
-	}
-
-	if channelContent.Len() > 0 {
+	// Build channel list with better formatting
+	channelContent := s.buildChannelList(state)
+	if channelContent != "" {
 		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:   "Channels",
-			Value:  channelContent.String(),
-			Inline: false,
-		})
-	} else {
-		fields = append(fields, &discordgo.MessageEmbedField{
-			Name:   "Channels",
-			Value:  "*No users online*",
+			Name:   "📢 Channels",
+			Value:  channelContent,
 			Inline: false,
 		})
 	}
 
 	embed.Fields = fields
 
-	// Footer with stats
-	footerText := fmt.Sprintf("%d/%d online • Uptime: %s", state.TotalUsers, state.MaxClients, formatDuration(state.Uptime))
-
+	// Clean footer
+	footerText := "Last updated"
 	if s.display.CustomFooter != "" {
-		footerText += " • " + s.display.CustomFooter
+		footerText = s.display.CustomFooter
 	}
 
 	embed.Footer = &discordgo.MessageEmbedFooter{
@@ -290,6 +281,57 @@ func (s *service) buildEmbed(state *teamspeak.State) *discordgo.MessageEmbed {
 	}
 
 	return embed
+}
+
+// buildChannelList formats the channel and user list.
+func (s *service) buildChannelList(state *teamspeak.State) string {
+	var content strings.Builder
+
+	hasContent := false
+
+	for _, ch := range state.Channels {
+		// Skip channels with no users if configured
+		if !s.display.ShowEmptyChannels && len(ch.Users) == 0 {
+			continue
+		}
+
+		// Skip spacer channels
+		if strings.Contains(strings.ToLower(ch.Name), "spacer") {
+			continue
+		}
+
+		hasContent = true
+
+		// Channel header with user count
+		if len(ch.Users) > 0 {
+			content.WriteString(fmt.Sprintf("**#%s** `%d`\n", ch.Name, len(ch.Users)))
+		} else {
+			content.WriteString(fmt.Sprintf("**#%s**\n", ch.Name))
+		}
+
+		// User list
+		for i, user := range ch.Users {
+			prefix := "├"
+			if i == len(ch.Users)-1 {
+				prefix = "└"
+			}
+
+			status := buildUserStatus(user)
+			if status != "" {
+				content.WriteString(fmt.Sprintf("%s %s %s\n", prefix, user.Nickname, status))
+			} else {
+				content.WriteString(fmt.Sprintf("%s %s\n", prefix, user.Nickname))
+			}
+		}
+
+		content.WriteString("\n")
+	}
+
+	if !hasContent {
+		return "*No active channels*"
+	}
+
+	return strings.TrimRight(content.String(), "\n")
 }
 
 // buildUserStatus creates a status string with icons for a user.
