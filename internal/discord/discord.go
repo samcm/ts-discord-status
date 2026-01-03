@@ -310,17 +310,12 @@ func (s *service) buildChannelList(state *teamspeak.State) string {
 		}
 
 		// User list
-		for i, user := range ch.Users {
-			prefix := "├"
-			if i == len(ch.Users)-1 {
-				prefix = "└"
-			}
-
+		for _, user := range ch.Users {
 			status := buildUserStatus(user)
 			if status != "" {
-				content.WriteString(fmt.Sprintf("%s %s %s\n", prefix, user.Nickname, status))
+				content.WriteString(fmt.Sprintf("ㅤ• %s %s\n", user.Nickname, status))
 			} else {
-				content.WriteString(fmt.Sprintf("%s %s\n", prefix, user.Nickname))
+				content.WriteString(fmt.Sprintf("ㅤ• %s\n", user.Nickname))
 			}
 		}
 
