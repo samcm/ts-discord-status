@@ -84,13 +84,66 @@ func (s *service) Stop() error {
 	return nil
 }
 
+// reconnect closes any existing connection and establishes a new one.
+// Must be called with s.mu held.
+func (s *service) reconnect() error {
+	if s.client != nil {
+		s.client.Close()
+		s.client = nil
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.QueryPort)
+	s.log.WithField("address", addr).Info("Reconnecting to TeamSpeak server")
+
+	client, err := ts3.NewClient(addr)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+
+	if err := client.Login(s.cfg.Username, s.cfg.Password); err != nil {
+		client.Close()
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+
+	if err := client.Use(s.cfg.ServerID); err != nil {
+		client.Close()
+		return fmt.Errorf("failed to select virtual server: %w", err)
+	}
+
+	s.client = client
+	s.log.Info("Reconnected to TeamSpeak server")
+
+	return nil
+}
+
 // GetState fetches the current state of the TeamSpeak server.
+// If the query fails, it attempts to reconnect and retry once.
 func (s *service) GetState(ctx context.Context) (*State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	state, err := s.queryState()
+	if err != nil {
+		s.log.WithError(err).Warn("Query failed, attempting reconnect")
+
+		if reconnErr := s.reconnect(); reconnErr != nil {
+			return nil, fmt.Errorf("reconnect failed: %w", reconnErr)
+		}
+
+		state, err = s.queryState()
+		if err != nil {
+			return nil, fmt.Errorf("query failed after reconnect: %w", err)
+		}
+	}
+
+	return state, nil
+}
+
+// queryState performs the actual TeamSpeak queries.
+// Must be called with s.mu held.
+func (s *service) queryState() (*State, error) {
 	if s.client == nil {
-		return nil, fmt.Errorf("not connected to TeamSpeak server")
+		return nil, fmt.Errorf("not connected")
 	}
 
 	// Get server info
