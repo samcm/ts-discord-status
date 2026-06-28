@@ -78,9 +78,6 @@ func NewService(log logrus.FieldLogger, cfg Config, display DisplayConfig) Servi
 
 // Start connects to Discord and finds or creates the status message.
 func (s *service) Start(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	session, err := discordgo.New("Bot " + s.cfg.Token)
 	if err != nil {
 		return fmt.Errorf("failed to create Discord session: %w", err)
@@ -90,24 +87,51 @@ func (s *service) Start(ctx context.Context) error {
 	// flaky network that floods Discord's daily login budget and gets the token
 	// disabled. Drive reconnects ourselves with bounded backoff instead.
 	session.ShouldReconnectOnError = false
+
+	s.mu.Lock()
 	s.session = session
+	s.mu.Unlock()
+
 	s.registerReconnectHandler()
 
+	// A Discord outage (or a disabled token) must never crash the process: the
+	// container would just hot-restart and turn each restart into a fresh login,
+	// recreating the storm at the Docker level. Fall back to bounded backoff.
+	if err := s.connect(); err != nil {
+		s.log.WithError(err).Warn("Initial Discord connection failed; retrying with backoff")
+		s.startReconnect()
+	}
+
+	return nil
+}
+
+// connect opens the gateway, counts the login against the rate window, and
+// ensures the status message exists.
+func (s *service) connect() error {
 	s.recordOpen()
 
-	if err := session.Open(); err != nil {
+	if err := s.session.Open(); err != nil {
 		return fmt.Errorf("failed to open Discord connection: %w", err)
 	}
 
 	s.log.Info("Connected to Discord")
 
-	// Find existing message from this bot
-	if err := s.findOrCreateMessage(); err != nil {
+	if err := s.ensureMessage(); err != nil {
 		s.session.Close()
+
 		return fmt.Errorf("failed to find or create status message: %w", err)
 	}
 
 	return nil
+}
+
+// ensureMessage finds or creates the status message under the service lock so
+// it cannot race with status updates.
+func (s *service) ensureMessage() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.findOrCreateMessage()
 }
 
 // findOrCreateMessage searches for an existing message from this bot or creates a new one.
@@ -165,18 +189,24 @@ func (s *service) Stop() error {
 // a bounded rate.
 func (s *service) registerReconnectHandler() {
 	s.session.AddHandler(func(_ *discordgo.Session, _ *discordgo.Disconnect) {
-		if s.closing.Load() {
-			return
-		}
-
-		if !s.reconnecting.CompareAndSwap(false, true) {
-			return
-		}
-
-		s.wg.Add(1)
-
-		go s.reconnectLoop()
+		s.startReconnect()
 	})
+}
+
+// startReconnect launches the backoff reconnect loop unless one is already
+// running or the service is stopping.
+func (s *service) startReconnect() {
+	if s.closing.Load() {
+		return
+	}
+
+	if !s.reconnecting.CompareAndSwap(false, true) {
+		return
+	}
+
+	s.wg.Add(1)
+
+	go s.reconnectLoop()
 }
 
 // reconnectLoop reopens the gateway with exponential backoff, honouring the
@@ -204,9 +234,7 @@ func (s *service) reconnectLoop() {
 			return
 		}
 
-		s.recordOpen()
-
-		if err := s.session.Open(); err != nil {
+		if err := s.connect(); err != nil {
 			delay *= 2
 			if delay > reconnectMaxDelay {
 				delay = reconnectMaxDelay
