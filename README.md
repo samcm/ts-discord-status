@@ -7,6 +7,7 @@ A minimal Go service that displays TeamSpeak server status in a Discord channel 
 - Shows active TeamSpeak channels and users in Discord
 - Auto-updates every 30 seconds (configurable)
 - Persists message across restarts (finds its own message in the channel)
+- Optional local SQLite recording of activity for a "year in recap"
 - Dry-run mode for testing without Discord
 - Docker image with multi-arch support (amd64, arm64)
 
@@ -63,9 +64,48 @@ display:
     password: "server-join-password"
   custom_footer: ""
 
+database:
+  enabled: true
+  path: /data/status.db
+  record_interval: 60s
+  retention_days: 400
+
 logging:
   level: "info"
 ```
+
+## Activity Recording & Recap
+
+When `database.enabled` is true, the service writes a minute-resolution snapshot
+of who is online to a local SQLite database. The schema is normalized (users are
+referenced by integer id) and presence rows are stored `WITHOUT ROWID`, so a year
+of a small server is on the order of ~100 MB. `retention_days` prunes older data
+(0 keeps everything); space is reclaimed automatically.
+
+The database needs a writable path — mount a volume and point `path` at it:
+
+```bash
+docker run -d \
+  -e TZ=Australia/Sydney \
+  -v /path/to/config.yaml:/config.yaml:ro \
+  -v /path/to/db:/data \
+  ghcr.io/samcm/ts-discord-status:latest --config /config.yaml
+```
+
+Print a recap from the recorded data:
+
+```bash
+# All time, or a single calendar year; --tz sets the day/hour grouping.
+ts-discord-status recap --db /data/status.db
+ts-discord-status recap --db /data/status.db --year 2026 --tz Australia/Sydney
+
+# In Docker (distroless has no shell, call the binary directly):
+docker exec <container> /ts-discord-status recap --db /data/status.db --year 2026
+```
+
+The recap reports the period covered, total populated time, peak concurrent
+users, the most active people, and the busiest day and hour. The raw tables
+(`samples`, `users`, `presence`) are plain SQLite if you want custom queries.
 
 ## Setup Guides
 

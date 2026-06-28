@@ -14,7 +14,17 @@ type Config struct {
 	TeamSpeak TeamSpeakConfig `yaml:"teamspeak"`
 	Discord   DiscordConfig   `yaml:"discord"`
 	Display   DisplayConfig   `yaml:"display"`
+	Database  DatabaseConfig  `yaml:"database"`
 	Logging   LoggingConfig   `yaml:"logging"`
+}
+
+// DatabaseConfig holds settings for recording status snapshots to a local
+// SQLite database.
+type DatabaseConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	Path           string        `yaml:"path"`
+	RecordInterval time.Duration `yaml:"record_interval"`
+	RetentionDays  int           `yaml:"retention_days"`
 }
 
 // TeamSpeakConfig holds TeamSpeak ServerQuery connection settings.
@@ -71,6 +81,10 @@ func Load(path string) (*Config, error) {
 			ShowEmptyChannels: false,
 			UpdateInterval:    30 * time.Second,
 		},
+		Database: DatabaseConfig{
+			RecordInterval: 60 * time.Second,
+			RetentionDays:  400,
+		},
 		Logging: LoggingConfig{
 			Level: "info",
 		},
@@ -107,6 +121,16 @@ func (c *Config) Validate() error {
 
 	if c.Display.UpdateInterval < 5*time.Second {
 		return fmt.Errorf("display.update_interval must be at least 5s")
+	}
+
+	if c.Database.Enabled {
+		if c.Database.Path == "" {
+			return fmt.Errorf("database.path is required when database.enabled is true")
+		}
+
+		if c.Database.RecordInterval < 5*time.Second {
+			return fmt.Errorf("database.record_interval must be at least 5s")
+		}
 	}
 
 	return nil

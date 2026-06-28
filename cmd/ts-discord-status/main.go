@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embed the timezone database for the recap in distroless
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -16,6 +17,7 @@ import (
 	"github.com/samcm/ts-discord-status/internal/bridge"
 	"github.com/samcm/ts-discord-status/internal/config"
 	"github.com/samcm/ts-discord-status/internal/discord"
+	"github.com/samcm/ts-discord-status/internal/store"
 	"github.com/samcm/ts-discord-status/internal/teamspeak"
 )
 
@@ -90,10 +92,20 @@ func run(cmd *cobra.Command, args []string) error {
 		ThumbnailURL:      cfg.Display.ThumbnailURL,
 	})
 
+	// Create status recorder (optional)
+	var storeService store.Service
+	if cfg.Database.Enabled {
+		storeService = store.NewService(log, store.Config{
+			Path:          cfg.Database.Path,
+			RetentionDays: cfg.Database.RetentionDays,
+		})
+	}
+
 	// Create bridge service
 	bridgeService := bridge.NewService(log, bridge.Config{
 		UpdateInterval: cfg.Display.UpdateInterval,
-	}, tsService, dcService)
+		RecordInterval: cfg.Database.RecordInterval,
+	}, tsService, dcService, storeService)
 
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(cmd.Context())

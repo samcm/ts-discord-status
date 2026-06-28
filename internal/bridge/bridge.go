@@ -10,12 +10,14 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/samcm/ts-discord-status/internal/discord"
+	"github.com/samcm/ts-discord-status/internal/store"
 	"github.com/samcm/ts-discord-status/internal/teamspeak"
 )
 
 // Config holds bridge configuration.
 type Config struct {
 	UpdateInterval time.Duration
+	RecordInterval time.Duration
 }
 
 // Service defines the bridge service interface.
@@ -25,21 +27,25 @@ type Service interface {
 }
 
 type service struct {
-	log       logrus.FieldLogger
-	cfg       Config
-	teamspeak teamspeak.Service
-	discord   discord.Service
-	done      chan struct{}
-	wg        sync.WaitGroup
+	log        logrus.FieldLogger
+	cfg        Config
+	teamspeak  teamspeak.Service
+	discord    discord.Service
+	store      store.Service
+	lastRecord time.Time
+	done       chan struct{}
+	wg         sync.WaitGroup
 }
 
-// NewService creates a new bridge service.
-func NewService(log logrus.FieldLogger, cfg Config, ts teamspeak.Service, dc discord.Service) Service {
+// NewService creates a new bridge service. store may be nil to disable
+// status recording.
+func NewService(log logrus.FieldLogger, cfg Config, ts teamspeak.Service, dc discord.Service, st store.Service) Service {
 	return &service{
 		log:       log.WithField("component", "bridge"),
 		cfg:       cfg,
 		teamspeak: ts,
 		discord:   dc,
+		store:     st,
 		done:      make(chan struct{}),
 	}
 }
@@ -57,10 +63,17 @@ func (s *service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start Discord service: %w", err)
 	}
 
-	// Do initial update
-	if err := s.update(ctx); err != nil {
-		s.log.WithError(err).Warn("Initial update failed")
+	// Start status recorder. A recording failure must never take down the bot,
+	// so degrade to no recording rather than returning a fatal error.
+	if s.store != nil {
+		if err := s.store.Start(ctx); err != nil {
+			s.log.WithError(err).Warn("Failed to start status recorder; continuing without recording")
+			s.store = nil
+		}
 	}
+
+	// Do initial update
+	s.tick(ctx)
 
 	// Start sync loop
 	s.wg.Add(1)
@@ -76,6 +89,12 @@ func (s *service) Start(ctx context.Context) error {
 func (s *service) Stop() error {
 	close(s.done)
 	s.wg.Wait()
+
+	if s.store != nil {
+		if err := s.store.Stop(); err != nil {
+			s.log.WithError(err).Warn("Failed to stop store service")
+		}
+	}
 
 	if err := s.discord.Stop(); err != nil {
 		s.log.WithError(err).Warn("Failed to stop Discord service")
@@ -104,25 +123,33 @@ func (s *service) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.update(ctx); err != nil {
-				s.log.WithError(err).Warn("Update failed")
-			}
+			s.tick(ctx)
 		}
 	}
 }
 
-// update fetches TeamSpeak state and updates Discord.
-func (s *service) update(ctx context.Context) error {
+// tick fetches the current TeamSpeak state once and fans it out to Discord and,
+// when due, the status recorder. A failure in one consumer does not block the
+// other.
+func (s *service) tick(ctx context.Context) {
 	state, err := s.teamspeak.GetState(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get TeamSpeak state: %w", err)
+		s.log.WithError(err).Warn("Failed to get TeamSpeak state")
+
+		return
 	}
 
 	s.log.WithField("users", state.TotalUsers).Debug("Fetched TeamSpeak state")
 
 	if err := s.discord.UpdateStatus(ctx, state); err != nil {
-		return fmt.Errorf("failed to update Discord status: %w", err)
+		s.log.WithError(err).Warn("Failed to update Discord status")
 	}
 
-	return nil
+	if s.store != nil && time.Since(s.lastRecord) >= s.cfg.RecordInterval {
+		if err := s.store.Record(ctx, state); err != nil {
+			s.log.WithError(err).Warn("Failed to record status snapshot")
+		} else {
+			s.lastRecord = time.Now()
+		}
+	}
 }
