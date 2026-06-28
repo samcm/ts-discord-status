@@ -85,6 +85,35 @@ func TestRecordIsIdempotentWithinMinute(t *testing.T) {
 	require.Equal(t, 3, count(t, svc, "SELECT COUNT(*) FROM users"))
 }
 
+func TestRecordChannelAndFlags(t *testing.T) {
+	svc := newTestService(t, 0)
+	ctx := context.Background()
+
+	st := &teamspeak.State{
+		TotalUsers: 1,
+		MaxClients: 32,
+		Uptime:     time.Hour,
+		Channels: []teamspeak.Channel{{
+			Name:  "Gaming",
+			Users: []teamspeak.User{{Nickname: "alice", InputMuted: true, Away: true}},
+		}},
+	}
+
+	require.NoError(t, svc.recordAt(ctx, time.Now().Unix(), st))
+
+	var (
+		channel string
+		flags   int
+	)
+
+	require.NoError(t, svc.db.QueryRow(
+		`SELECT c.name, p.flags FROM presence p JOIN channels c ON c.id = p.channel_id`,
+	).Scan(&channel, &flags))
+
+	require.Equal(t, "Gaming", channel)
+	require.Equal(t, flagMicMuted|flagAway, flags)
+}
+
 func TestPruneDropsExpiredRows(t *testing.T) {
 	svc := newTestService(t, 400)
 	ctx := context.Background()

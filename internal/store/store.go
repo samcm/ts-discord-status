@@ -28,6 +28,14 @@ const (
 	retentionInterval = 24 * time.Hour
 )
 
+// Presence status flags, packed into the presence.flags bitfield.
+const (
+	flagMicMuted  = 1 << 0 // microphone muted
+	flagDeafened  = 1 << 1 // speakers/output muted
+	flagAway      = 1 << 2 // away / AFK
+	flagRecording = 1 << 3 // actively recording
+)
+
 // schema is the on-disk layout. presence is WITHOUT ROWID and references users
 // by integer id so the high-cardinality table stays as small as possible.
 const schema = `
@@ -43,9 +51,15 @@ CREATE TABLE IF NOT EXISTS users (
 	first_seen INTEGER NOT NULL,
 	last_seen  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS channels (
+	id   INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS presence (
-	ts      INTEGER NOT NULL,
-	user_id INTEGER NOT NULL,
+	ts         INTEGER NOT NULL,
+	user_id    INTEGER NOT NULL,
+	channel_id INTEGER NOT NULL DEFAULT 0,
+	flags      INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (ts, user_id)
 ) WITHOUT ROWID;`
 
@@ -77,19 +91,21 @@ type service struct {
 	cfg Config
 	db  *sql.DB
 
-	mu      sync.Mutex
-	userIDs map[string]int64
-	done    chan struct{}
-	wg      sync.WaitGroup
+	mu         sync.Mutex
+	userIDs    map[string]int64
+	channelIDs map[string]int64
+	done       chan struct{}
+	wg         sync.WaitGroup
 }
 
 // NewService creates a new status recorder.
 func NewService(log logrus.FieldLogger, cfg Config) Service {
 	return &service{
-		log:     log.WithField("component", "store"),
-		cfg:     cfg,
-		userIDs: make(map[string]int64, 32),
-		done:    make(chan struct{}),
+		log:        log.WithField("component", "store"),
+		cfg:        cfg,
+		userIDs:    make(map[string]int64, 32),
+		channelIDs: make(map[string]int64, 16),
+		done:       make(chan struct{}),
 	}
 }
 
@@ -185,6 +201,11 @@ func (s *service) recordAt(ctx context.Context, now int64, state *teamspeak.Stat
 	seen := make(map[string]struct{}, state.TotalUsers)
 
 	for _, ch := range state.Channels {
+		cid, err := s.channelID(ctx, tx, ch.Name)
+		if err != nil {
+			return err
+		}
+
 		for _, u := range ch.Users {
 			nick := strings.TrimSpace(u.Nickname)
 			if nick == "" {
@@ -197,13 +218,17 @@ func (s *service) recordAt(ctx context.Context, now int64, state *teamspeak.Stat
 
 			seen[nick] = struct{}{}
 
-			id, err := s.userID(ctx, tx, nick, ts)
+			uid, err := s.userID(ctx, tx, nick, ts)
 			if err != nil {
 				return err
 			}
 
 			if _, err := tx.ExecContext(ctx,
-				`INSERT OR IGNORE INTO presence (ts, user_id) VALUES (?, ?)`, ts, id,
+				`INSERT INTO presence (ts, user_id, channel_id, flags) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(ts, user_id) DO UPDATE SET
+				     channel_id = excluded.channel_id,
+				     flags      = excluded.flags`,
+				ts, uid, cid, userFlags(u),
 			); err != nil {
 				return fmt.Errorf("failed to record presence: %w", err)
 			}
@@ -245,6 +270,62 @@ func (s *service) userID(ctx context.Context, tx *sql.Tx, nick string, now int64
 	s.mu.Unlock()
 
 	return id, nil
+}
+
+// channelID upserts a channel name and returns its integer id, caching the
+// lookup. It returns 0 (unknown) for an empty name.
+func (s *service) channelID(ctx context.Context, tx *sql.Tx, name string) (int64, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	id, ok := s.channelIDs[name]
+	s.mu.Unlock()
+
+	if ok {
+		return id, nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO channels (name) VALUES (?) ON CONFLICT(name) DO NOTHING`, name,
+	); err != nil {
+		return 0, fmt.Errorf("failed to upsert channel: %w", err)
+	}
+
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM channels WHERE name = ?`, name).Scan(&id); err != nil {
+		return 0, fmt.Errorf("failed to look up channel id: %w", err)
+	}
+
+	s.mu.Lock()
+	s.channelIDs[name] = id
+	s.mu.Unlock()
+
+	return id, nil
+}
+
+// userFlags packs a user's mute/away/recording state into the presence bitfield.
+func userFlags(u teamspeak.User) int {
+	var f int
+
+	if u.InputMuted {
+		f |= flagMicMuted
+	}
+
+	if u.OutputMuted {
+		f |= flagDeafened
+	}
+
+	if u.Away {
+		f |= flagAway
+	}
+
+	if u.IsRecording {
+		f |= flagRecording
+	}
+
+	return f
 }
 
 // retentionLoop prunes rows older than the retention window once a day.

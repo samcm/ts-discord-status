@@ -77,10 +77,12 @@ logging:
 ## Activity Recording & Recap
 
 When `database.enabled` is true, the service writes a minute-resolution snapshot
-of who is online to a local SQLite database. The schema is normalized (users are
-referenced by integer id) and presence rows are stored `WITHOUT ROWID`, so a year
-of a small server is on the order of ~100 MB. `retention_days` prunes older data
-(0 keeps everything); space is reclaimed automatically.
+to a local SQLite database: who is online, which channel they're in, and their
+status (mic-muted, deafened, AFK, recording — packed into a flags bitfield). The
+schema is normalized (users and channels referenced by integer id) and presence
+rows are stored `WITHOUT ROWID`, so a year of a small server is on the order of
+~100 MB. `retention_days` prunes older data (0 keeps everything); space is
+reclaimed automatically.
 
 The database needs a writable path — mount a volume and point `path` at it:
 

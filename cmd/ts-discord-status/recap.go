@@ -103,6 +103,10 @@ func runRecap(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := printChannels(db, pWhere, pArgs); err != nil {
+		return err
+	}
+
 	if err := printBusiest(db, where, args2, loc); err != nil {
 		return err
 	}
@@ -113,7 +117,9 @@ func runRecap(cmd *cobra.Command, args []string) error {
 }
 
 func printTopUsers(db *sql.DB, pWhere string, pArgs []any, loc *time.Location) error {
-	rows, err := db.Query(`SELECT u.nickname, COUNT(*) AS mins, MIN(p.ts), MAX(p.ts)
+	rows, err := db.Query(`SELECT u.nickname, COUNT(*) AS mins,
+		SUM(p.flags & 1) AS muted, SUM((p.flags >> 2) & 1) AS away,
+		MIN(p.ts), MAX(p.ts)
 		FROM presence p JOIN users u ON u.id = p.user_id `+pWhere+`
 		GROUP BY p.user_id ORDER BY mins DESC LIMIT 15`, pArgs...)
 	if err != nil {
@@ -127,22 +133,60 @@ func printTopUsers(db *sql.DB, pWhere string, pArgs []any, loc *time.Location) e
 
 	for rows.Next() {
 		var (
-			nick     string
-			mins     int64
-			min, max int64
+			nick        string
+			mins        int64
+			muted, away int64
+			min, max    int64
 		)
 
-		if err := rows.Scan(&nick, &mins, &min, &max); err != nil {
+		if err := rows.Scan(&nick, &mins, &muted, &away, &min, &max); err != nil {
 			return fmt.Errorf("failed to scan user: %w", err)
 		}
 
 		rank++
 
-		fmt.Printf("    %2d. %-24s %-12s  (first %s, last %s)\n",
-			rank, nick, humanMinutes(mins), fmtDate(min, loc), fmtDate(max, loc))
+		fmt.Printf("    %2d. %-18s %-10s  muted %3d%%  afk %3d%%  (%s - %s)\n",
+			rank, nick, humanMinutes(mins), pct(muted, mins), pct(away, mins),
+			fmtDate(min, loc), fmtDate(max, loc))
 	}
 
 	return rows.Err()
+}
+
+// printChannels ranks channels by total time spent in them.
+func printChannels(db *sql.DB, pWhere string, pArgs []any) error {
+	rows, err := db.Query(`SELECT c.name, COUNT(*) AS mins
+		FROM presence p JOIN channels c ON c.id = p.channel_id `+pWhere+`
+		GROUP BY p.channel_id ORDER BY mins DESC LIMIT 10`, pArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to rank channels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	fmt.Println("\n  Most popular channels:")
+
+	for rows.Next() {
+		var (
+			name string
+			mins int64
+		)
+
+		if err := rows.Scan(&name, &mins); err != nil {
+			return fmt.Errorf("failed to scan channel: %w", err)
+		}
+
+		fmt.Printf("    %-24s %s\n", name, humanMinutes(mins))
+	}
+
+	return rows.Err()
+}
+
+func pct(part, total int64) int64 {
+	if total == 0 {
+		return 0
+	}
+
+	return part * 100 / total
 }
 
 // printBusiest buckets samples by day and hour in the target timezone.
