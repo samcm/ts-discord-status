@@ -6,12 +6,23 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/sirupsen/logrus"
 
 	"github.com/samcm/ts-discord-status/internal/teamspeak"
+)
+
+const (
+	// reconnectBaseDelay is the initial wait before the first reconnect attempt.
+	reconnectBaseDelay = 5 * time.Second
+	// reconnectMaxDelay caps the exponential backoff between reconnect attempts.
+	reconnectMaxDelay = 10 * time.Minute
+	// maxOpensPerHour bounds gateway logins so a flapping network cannot exhaust
+	// Discord's daily IDENTIFY budget and trip its abuse protection.
+	maxOpensPerHour = 10
 )
 
 // Config holds Discord bot settings.
@@ -46,6 +57,13 @@ type service struct {
 	mu                sync.Mutex
 	lastUserCount     int       // Track to avoid unnecessary renames
 	lastChannelRename time.Time // Rate limit channel renames
+
+	done         chan struct{}
+	wg           sync.WaitGroup
+	closing      atomic.Bool
+	reconnecting atomic.Bool
+	reconnectMu  sync.Mutex
+	openTimes    []time.Time
 }
 
 // NewService creates a new Discord service.
@@ -54,6 +72,7 @@ func NewService(log logrus.FieldLogger, cfg Config, display DisplayConfig) Servi
 		log:     log.WithField("component", "discord"),
 		cfg:     cfg,
 		display: display,
+		done:    make(chan struct{}),
 	}
 }
 
@@ -67,11 +86,19 @@ func (s *service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create Discord session: %w", err)
 	}
 
+	// discordgo's built-in reconnect re-IDENTIFYs with no effective floor; on a
+	// flaky network that floods Discord's daily login budget and gets the token
+	// disabled. Drive reconnects ourselves with bounded backoff instead.
+	session.ShouldReconnectOnError = false
+	s.session = session
+	s.registerReconnectHandler()
+
+	s.recordOpen()
+
 	if err := session.Open(); err != nil {
 		return fmt.Errorf("failed to open Discord connection: %w", err)
 	}
 
-	s.session = session
 	s.log.Info("Connected to Discord")
 
 	// Find existing message from this bot
@@ -117,6 +144,10 @@ func (s *service) findOrCreateMessage() error {
 
 // Stop disconnects from Discord.
 func (s *service) Stop() error {
+	s.closing.Store(true)
+	close(s.done)
+	s.wg.Wait()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -127,6 +158,113 @@ func (s *service) Stop() error {
 	}
 
 	return nil
+}
+
+// registerReconnectHandler wires gateway disconnects to a single backoff-driven
+// reconnect loop, replacing discordgo's built-in reconnect so logins stay within
+// a bounded rate.
+func (s *service) registerReconnectHandler() {
+	s.session.AddHandler(func(_ *discordgo.Session, _ *discordgo.Disconnect) {
+		if s.closing.Load() {
+			return
+		}
+
+		if !s.reconnecting.CompareAndSwap(false, true) {
+			return
+		}
+
+		s.wg.Add(1)
+
+		go s.reconnectLoop()
+	})
+}
+
+// reconnectLoop reopens the gateway with exponential backoff, honouring the
+// hourly login cap, until it succeeds or the service is stopping.
+func (s *service) reconnectLoop() {
+	defer s.wg.Done()
+	defer s.reconnecting.Store(false)
+
+	s.log.Warn("Discord gateway disconnected, reconnecting with backoff")
+
+	delay := reconnectBaseDelay
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-time.After(delay):
+		}
+
+		if s.closing.Load() {
+			return
+		}
+
+		if !s.waitForOpenBudget() {
+			return
+		}
+
+		s.recordOpen()
+
+		if err := s.session.Open(); err != nil {
+			delay *= 2
+			if delay > reconnectMaxDelay {
+				delay = reconnectMaxDelay
+			}
+
+			s.log.WithError(err).WithField("retry_in", delay).Warn("Discord reconnect attempt failed")
+
+			continue
+		}
+
+		s.log.Info("Reconnected to Discord gateway")
+
+		return
+	}
+}
+
+// waitForOpenBudget blocks until opening another gateway connection stays within
+// maxOpensPerHour. It returns false if the service is stopping.
+func (s *service) waitForOpenBudget() bool {
+	for {
+		s.reconnectMu.Lock()
+
+		cutoff := time.Now().Add(-time.Hour)
+		kept := s.openTimes[:0]
+
+		for _, t := range s.openTimes {
+			if t.After(cutoff) {
+				kept = append(kept, t)
+			}
+		}
+
+		s.openTimes = kept
+
+		if len(s.openTimes) < maxOpensPerHour {
+			s.reconnectMu.Unlock()
+
+			return true
+		}
+
+		wait := time.Until(s.openTimes[0].Add(time.Hour))
+		s.reconnectMu.Unlock()
+
+		s.log.WithField("wait", wait).Warn("Discord login rate cap reached, delaying reconnect")
+
+		select {
+		case <-s.done:
+			return false
+		case <-time.After(wait):
+		}
+	}
+}
+
+// recordOpen timestamps a gateway open for the hourly rate window.
+func (s *service) recordOpen() {
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
+	s.openTimes = append(s.openTimes, time.Now())
 }
 
 // UpdateStatus updates the Discord message with the current TeamSpeak state.
