@@ -106,8 +106,8 @@ func run(cmd *cobra.Command, args []string) error {
 	var apiServer *api.Server
 	if cfg.API.Listen != "" {
 		apiServer = api.NewServer(log, api.Config{
-			Listen: cfg.API.Listen,
-			Token:  cfg.API.Token,
+			Listen:      cfg.API.Listen,
+			TokenSHA256: cfg.API.TokenSHA256,
 		})
 	}
 

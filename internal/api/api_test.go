@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +13,9 @@ import (
 
 	"github.com/samcm/ts-discord-status/internal/teamspeak"
 )
+
+// hash is the SHA-256 hex of "s3cret".
+var hash = func() string { h := sha256.Sum256([]byte("s3cret")); return hex.EncodeToString(h[:]) }()
 
 func get(t *testing.T, s *Server, method, path, auth string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -30,7 +35,7 @@ func TestStatusServesOnlyTheAgreedFields(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	s := NewServer(log, Config{Token: "s3cret"})
+	s := NewServer(log, Config{TokenSHA256: hash})
 
 	// Before the first poll.
 	rec := get(t, s, http.MethodGet, "/status", "Bearer s3cret")
@@ -77,13 +82,19 @@ func TestStatusRequiresTokenAndIsReadOnly(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	s := NewServer(log, Config{Token: "s3cret"})
+	s := NewServer(log, Config{TokenSHA256: hash})
 
-	for _, auth := range []string{"", "Bearer wrong", "s3cret", "Bearer s3cret2", "Basic s3cret"} {
-		rec := get(t, s, http.MethodGet, "/status", auth)
-		require.Equal(t, http.StatusUnauthorized, rec.Code, "auth %q", auth)
-		require.Empty(t, rec.Body.String())
+	// Every request without the right token gets an empty 401, on any path or
+	// method, including sending the hash itself as the token.
+	for _, auth := range []string{"", "Bearer", "Bearer ", "Bearer wrong", "s3cret", "Bearer s3cret2", "Basic s3cret", "bearer s3cret", "Bearer " + hash} {
+		for _, path := range []string{"/status", "/", "/status/x"} {
+			rec := get(t, s, http.MethodGet, path, auth)
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "auth %q path %s", auth, path)
+			require.Empty(t, rec.Body.String())
+		}
 	}
+
+	require.Equal(t, http.StatusUnauthorized, get(t, s, http.MethodPost, "/status", "").Code)
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		rec := get(t, s, method, "/status", "Bearer s3cret")
@@ -94,7 +105,9 @@ func TestStatusRequiresTokenAndIsReadOnly(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, get(t, s, http.MethodGet, "/", "Bearer s3cret").Code)
 	require.Equal(t, http.StatusNotFound, get(t, s, http.MethodGet, "/status/x", "Bearer s3cret").Code)
 
-	// Without a token configured, the endpoint is open.
-	open := NewServer(log, Config{})
-	require.Equal(t, http.StatusOK, get(t, open, http.MethodGet, "/status", "").Code)
+	// A missing or malformed hash rejects everything rather than opening up.
+	for _, bad := range []string{"", "not-hex", hash[:62]} {
+		rec := get(t, NewServer(log, Config{TokenSHA256: bad}), http.MethodGet, "/status", "Bearer s3cret")
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "hash %q", bad)
+	}
 }

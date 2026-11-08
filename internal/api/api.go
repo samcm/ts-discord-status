@@ -8,11 +8,14 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,7 +27,10 @@ import (
 // Config holds API server settings.
 type Config struct {
 	Listen string // host:port to listen on
-	Token  string // when set, requests must send "Authorization: Bearer <Token>"
+	// TokenSHA256 is the lowercase hex SHA-256 of the bearer token. Every
+	// request must send "Authorization: Bearer <token>" whose hash matches;
+	// any other request gets an empty 401. The server never holds the token.
+	TokenSHA256 string
 }
 
 // Status is the JSON document served at /status.
@@ -63,7 +69,7 @@ func NewServer(log logrus.FieldLogger, cfg Config) *Server {
 	mux.HandleFunc("/status", s.handleStatus)
 
 	s.srv = &http.Server{
-		Handler:           mux,
+		Handler:           s.requireToken(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -146,13 +152,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.authorized(r) {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		w.WriteHeader(http.StatusUnauthorized)
-
-		return
-	}
-
 	s.mu.RLock()
 	body, err := json.Marshal(s.status)
 	s.mu.RUnlock()
@@ -169,13 +168,25 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(body)
 }
 
-func (s *Server) authorized(r *http.Request) bool {
-	if s.cfg.Token == "" {
-		return true
+// requireToken answers 401 to every request, on any path or method, that
+// lacks a bearer token matching TokenSHA256.
+func (s *Server) requireToken(next http.Handler) http.Handler {
+	want, err := hex.DecodeString(strings.ToLower(s.cfg.TokenSHA256))
+	if err != nil || len(want) != sha256.Size {
+		want = nil // misconfigured: reject everything
 	}
 
-	want := []byte("Bearer " + s.cfg.Token)
-	got := []byte(r.Header.Get("Authorization"))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sum := sha256.Sum256([]byte(token))
 
-	return subtle.ConstantTimeCompare(got, want) == 1
+		if !ok || token == "" || want == nil || subtle.ConstantTimeCompare(sum[:], want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.WriteHeader(http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

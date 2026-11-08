@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -30,8 +31,8 @@ type DatabaseConfig struct {
 
 // APIConfig holds settings for the read-only status API.
 type APIConfig struct {
-	Listen string `yaml:"listen"` // e.g. ":8080"; empty disables the API
-	Token  string `yaml:"token"`  // optional bearer token required on every request
+	Listen      string `yaml:"listen"`       // e.g. ":8080"; empty disables the API
+	TokenSHA256 string `yaml:"token_sha256"` // hex SHA-256 of the bearer token every request must send
 }
 
 // TeamSpeakConfig holds TeamSpeak ServerQuery connection settings.
@@ -137,6 +138,12 @@ func (c *Config) Validate() error {
 
 		if c.Database.RecordInterval < 5*time.Second {
 			return fmt.Errorf("database.record_interval must be at least 5s")
+		}
+	}
+
+	if c.API.Listen != "" {
+		if b, err := hex.DecodeString(c.API.TokenSHA256); err != nil || len(b) != 32 {
+			return fmt.Errorf("api.token_sha256 must be the 64-character hex SHA-256 of the API token")
 		}
 	}
 

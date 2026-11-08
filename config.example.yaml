@@ -43,8 +43,9 @@ display:
 # Optional: read-only JSON status API at GET /status
 # api:
 #   listen: ":8080"
-#   # When set, requests must send "Authorization: Bearer <token>"
-#   token: "long-random-string"
+#   # Required: hex SHA-256 of the bearer token every request must send
+#   # (printf %s "$TOKEN" | sha256sum). Other requests get a 401.
+#   token_sha256: "<64-char hex>"
 
 logging:
   # Log level: debug, info, warn, error (default: info)

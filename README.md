@@ -113,13 +113,14 @@ users, the most active people, and the busiest day and hour. The raw tables
 
 Set `api.listen` to serve a read-only JSON summary of the latest poll at
 `GET /status`. It answers from the bridge's last poll, so requests never reach
-TeamSpeak. With `api.token` set, requests must send
-`Authorization: Bearer <token>`.
+TeamSpeak. Every request must send `Authorization: Bearer <token>`, and the
+config holds only the token's SHA-256 (`printf %s "$TOKEN" | sha256sum`);
+anything else gets an empty 401.
 
 ```yaml
 api:
   listen: ":8080"
-  token: "long-random-string"
+  token_sha256: "<64-char hex sha256 of the token>"
 ```
 
 ```json
