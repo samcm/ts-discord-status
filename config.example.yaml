@@ -40,6 +40,12 @@ display:
   # Optional: Thumbnail image URL for the embed
   # thumbnail_url: "https://example.com/server-logo.png"
 
+# Optional: read-only JSON status API at GET /status
+# api:
+#   listen: ":8080"
+#   # When set, requests must send "Authorization: Bearer <token>"
+#   token: "long-random-string"
+
 logging:
   # Log level: debug, info, warn, error (default: info)
   level: "info"

@@ -15,6 +15,7 @@ type Config struct {
 	Discord   DiscordConfig   `yaml:"discord"`
 	Display   DisplayConfig   `yaml:"display"`
 	Database  DatabaseConfig  `yaml:"database"`
+	API       APIConfig       `yaml:"api"`
 	Logging   LoggingConfig   `yaml:"logging"`
 }
 
@@ -25,6 +26,12 @@ type DatabaseConfig struct {
 	Path           string        `yaml:"path"`
 	RecordInterval time.Duration `yaml:"record_interval"`
 	RetentionDays  int           `yaml:"retention_days"`
+}
+
+// APIConfig holds settings for the read-only status API.
+type APIConfig struct {
+	Listen string `yaml:"listen"` // e.g. ":8080"; empty disables the API
+	Token  string `yaml:"token"`  // optional bearer token required on every request
 }
 
 // TeamSpeakConfig holds TeamSpeak ServerQuery connection settings.

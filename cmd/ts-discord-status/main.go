@@ -14,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
+	"github.com/samcm/ts-discord-status/internal/api"
 	"github.com/samcm/ts-discord-status/internal/bridge"
 	"github.com/samcm/ts-discord-status/internal/config"
 	"github.com/samcm/ts-discord-status/internal/discord"
@@ -101,11 +102,20 @@ func run(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	// Create status API (optional)
+	var apiServer *api.Server
+	if cfg.API.Listen != "" {
+		apiServer = api.NewServer(log, api.Config{
+			Listen: cfg.API.Listen,
+			Token:  cfg.API.Token,
+		})
+	}
+
 	// Create bridge service
 	bridgeService := bridge.NewService(log, bridge.Config{
 		UpdateInterval: cfg.Display.UpdateInterval,
 		RecordInterval: cfg.Database.RecordInterval,
-	}, tsService, dcService, storeService)
+	}, tsService, dcService, storeService, apiServer)
 
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(cmd.Context())
@@ -125,8 +135,25 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start bridge: %w", err)
 	}
 
+	if apiServer != nil {
+		if err := apiServer.Start(); err != nil {
+			bridgeService.Stop()
+
+			return fmt.Errorf("failed to start API server: %w", err)
+		}
+	}
+
 	// Wait for context cancellation
 	<-ctx.Done()
+
+	if apiServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := apiServer.Stop(shutdownCtx); err != nil {
+			log.WithError(err).Warn("Error stopping API server")
+		}
+
+		shutdownCancel()
+	}
 
 	// Stop bridge
 	if err := bridgeService.Stop(); err != nil {

@@ -109,6 +109,36 @@ The recap reports the period covered, total populated time, peak concurrent
 users, the most active people, and the busiest day and hour. The raw tables
 (`samples`, `users`, `presence`) are plain SQLite if you want custom queries.
 
+## Status API
+
+Set `api.listen` to serve a read-only JSON summary of the latest poll at
+`GET /status`. It answers from the bridge's last poll, so requests never reach
+TeamSpeak. With `api.token` set, requests must send
+`Authorization: Bearer <token>`.
+
+```yaml
+api:
+  listen: ":8080"
+  token: "long-random-string"
+```
+
+```json
+{
+  "online": true,
+  "clients": 3,
+  "max_clients": 32,
+  "channels": [
+    {"name": "Lobby", "users": ["Alice", "Bob"]},
+    {"name": "Gaming", "users": ["Charlie"]}
+  ],
+  "last_updated": "2026-11-08T09:30:00Z"
+}
+```
+
+`channels` lists only occupied channels, in TeamSpeak's order. `online` is
+false when the last poll failed; `last_updated` is the time of the last poll
+(UTC), or null before the first.
+
 ## Setup Guides
 
 ### Getting Discord Bot Token & Channel ID

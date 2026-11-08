@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/samcm/ts-discord-status/internal/api"
 	"github.com/samcm/ts-discord-status/internal/discord"
 	"github.com/samcm/ts-discord-status/internal/store"
 	"github.com/samcm/ts-discord-status/internal/teamspeak"
@@ -32,20 +33,22 @@ type service struct {
 	teamspeak  teamspeak.Service
 	discord    discord.Service
 	store      store.Service
+	api        *api.Server
 	lastRecord time.Time
 	done       chan struct{}
 	wg         sync.WaitGroup
 }
 
 // NewService creates a new bridge service. store may be nil to disable
-// status recording.
-func NewService(log logrus.FieldLogger, cfg Config, ts teamspeak.Service, dc discord.Service, st store.Service) Service {
+// status recording, and apiServer nil to disable the status API.
+func NewService(log logrus.FieldLogger, cfg Config, ts teamspeak.Service, dc discord.Service, st store.Service, apiServer *api.Server) Service {
 	return &service{
 		log:       log.WithField("component", "bridge"),
 		cfg:       cfg,
 		teamspeak: ts,
 		discord:   dc,
 		store:     st,
+		api:       apiServer,
 		done:      make(chan struct{}),
 	}
 }
@@ -133,6 +136,11 @@ func (s *service) loop(ctx context.Context) {
 // other.
 func (s *service) tick(ctx context.Context) {
 	state, err := s.teamspeak.GetState(ctx)
+
+	if s.api != nil {
+		s.api.Update(state, time.Now())
+	}
+
 	if err != nil {
 		s.log.WithError(err).Warn("Failed to get TeamSpeak state")
 
