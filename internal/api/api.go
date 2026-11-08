@@ -1,7 +1,8 @@
 // Package api serves a read-only JSON summary of the latest TeamSpeak state.
 //
 // The response holds only whether the server is online, the client counts,
-// the user names per occupied channel, and when the state was last polled.
+// the users per occupied channel with their mute, deafen, away and idle
+// status, and when the state was last polled.
 // It is served from the bridge's latest poll, so requests never reach
 // TeamSpeak.
 package api
@@ -44,8 +45,18 @@ type Status struct {
 
 // Channel lists the users in one occupied channel.
 type Channel struct {
-	Name  string   `json:"name"`
-	Users []string `json:"users"`
+	Name  string `json:"name"`
+	Users []User `json:"users"`
+}
+
+// User is one connected client as of the last poll. Talking is left out: a
+// 30-second snapshot of TeamSpeak's talking flag misses nearly all speech.
+type User struct {
+	Name        string `json:"name"`
+	InputMuted  bool   `json:"input_muted"`  // microphone muted
+	OutputMuted bool   `json:"output_muted"` // speakers muted (deafened)
+	Away        bool   `json:"away"`
+	IdleS       int64  `json:"idle_s"` // seconds since the client's last activity
 }
 
 // Server serves the latest status over HTTP.
@@ -104,12 +115,18 @@ func (s *Server) Update(state *teamspeak.State, at time.Time) {
 			continue
 		}
 
-		names := make([]string, 0, len(ch.Users))
+		users := make([]User, 0, len(ch.Users))
 		for _, u := range ch.Users {
-			names = append(names, u.Nickname)
+			users = append(users, User{
+				Name:        u.Nickname,
+				InputMuted:  u.InputMuted,
+				OutputMuted: u.OutputMuted,
+				Away:        u.Away,
+				IdleS:       int64(u.IdleTime / time.Second),
+			})
 		}
 
-		channels = append(channels, Channel{Name: ch.Name, Users: names})
+		channels = append(channels, Channel{Name: ch.Name, Users: users})
 	}
 
 	s.status = Status{

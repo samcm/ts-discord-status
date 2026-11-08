@@ -129,14 +129,22 @@ api:
   "clients": 3,
   "max_clients": 32,
   "channels": [
-    {"name": "Lobby", "users": ["Alice", "Bob"]},
-    {"name": "Gaming", "users": ["Charlie"]}
+    {"name": "Lobby", "users": [
+      {"name": "Alice", "input_muted": false, "output_muted": false, "away": false, "idle_s": 12},
+      {"name": "Bob", "input_muted": true, "output_muted": true, "away": true, "idle_s": 1840}
+    ]},
+    {"name": "Gaming", "users": [
+      {"name": "Charlie", "input_muted": true, "output_muted": false, "away": false, "idle_s": 3}
+    ]}
   ],
   "last_updated": "2026-11-08T09:30:00Z"
 }
 ```
 
-`channels` lists only occupied channels, in TeamSpeak's order. `online` is
+`channels` lists only occupied channels, in TeamSpeak's order. Each user has
+`input_muted` (microphone muted), `output_muted` (deafened), `away`, and
+`idle_s` (whole seconds since their last activity), all as of the last poll.
+Talking is not reported: the poll would only catch it by chance. `online` is
 false when the last poll failed; `last_updated` is the time of the last poll
 (UTC), or null before the first.
 

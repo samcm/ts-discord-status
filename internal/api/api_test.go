@@ -50,11 +50,11 @@ func TestStatusServesOnlyTheAgreedFields(t *testing.T) {
 		MaxClients: 32,
 		Channels: []teamspeak.Channel{
 			{ID: 1, Name: "Lobby", Users: []teamspeak.User{
-				{ID: 7, Nickname: "alice", AwayMessage: "brb", Away: true, InputMuted: true},
-				{ID: 9, Nickname: "bob"},
+				{ID: 7, Nickname: "alice", AwayMessage: "brb", Away: true, InputMuted: true, IdleTime: 95*time.Second + 999*time.Millisecond},
+				{ID: 9, Nickname: "bob", OutputMuted: true, IdleTime: 400 * time.Millisecond},
 			}},
 			{ID: 2, Name: "Empty"},
-			{ID: 3, Name: "Raid", Users: []teamspeak.User{{ID: 11, Nickname: "carol", IsRecording: true}}},
+			{ID: 3, Name: "Raid", Users: []teamspeak.User{{ID: 11, Nickname: "carol", IsRecording: true, IdleTime: 2 * time.Hour}}},
 		},
 	}, at)
 
@@ -66,8 +66,13 @@ func TestStatusServesOnlyTheAgreedFields(t *testing.T) {
 		"clients": 3,
 		"max_clients": 32,
 		"channels": [
-			{"name": "Lobby", "users": ["alice", "bob"]},
-			{"name": "Raid", "users": ["carol"]}
+			{"name": "Lobby", "users": [
+				{"name": "alice", "input_muted": true, "output_muted": false, "away": true, "idle_s": 95},
+				{"name": "bob", "input_muted": false, "output_muted": true, "away": false, "idle_s": 0}
+			]},
+			{"name": "Raid", "users": [
+				{"name": "carol", "input_muted": false, "output_muted": false, "away": false, "idle_s": 7200}
+			]}
 		],
 		"last_updated": "2026-11-07T23:30:15Z"
 	}`, rec.Body.String())
